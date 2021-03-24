@@ -4,6 +4,7 @@ import threading
 import queue
 import sys
 import random
+import struct
 
 # Users Ports 2000 - 5000
 # Server Ports 6000 - 10000
@@ -12,6 +13,7 @@ import random
 def receive_data(sock):
     while True:
         try:
+            data,addr = sock.recvfrom(1024)
             data,addr = sock.recvfrom(1024)
             print(data.decode('utf-8'))
         except:
@@ -37,11 +39,30 @@ def send_data(sock, server, name):
 
 def run_client(server_id):
 
+    ########  Multicast connection
+    multicast_ip = '224.3.29.71'
+    multicast_group = (multicast_ip, int(server_id))
+    
+    server_address = ('', int(server_id))
+    
+    recv_sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    recv_sock.bind(server_address)
+
+    group = socket.inet_aton(multicast_ip)
+    mreq = struct.pack('4sL', group, socket.INADDR_ANY)
+    recv_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+    send_sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    #########
+
     host = socket.gethostbyname(socket.gethostname())
     port = random.randint(6000,10000)
 
     print('Client IP-> ' + str(host) + ' Port-> ' + str(port))
-    server = (host, int(server_id))
+    server = (host, int(server_id)) # Server address
+    # Soket for connection with server
     s = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
     s.bind((host,port))
 
@@ -54,16 +75,16 @@ def run_client(server_id):
     
     print('Please, wait for access...')
     
-    access, addrws = s.recvfrom(1024)
+    access, addres = s.recvfrom(1024)
     if access.decode('utf-8') != 'y':
         print('Access denied')
         os._exit(1)
     else: 
         msg = '{} joined!'.format(name)
-        s.sendto(msg.encode('utf-8'), server)
+        send_sock.sendto(msg.encode('utf-8'), multicast_group)
 
-    threading.Thread(target=receive_data, args=(s,)).start()
-    threading.Thread(target=send_data, args=(s, server, name,)).start()
+    threading.Thread(target=receive_data, args=(recv_sock,)).start()
+    threading.Thread(target=send_data, args=(send_sock, multicast_group, name,)).start()
 
 
 # Server Side
@@ -79,7 +100,8 @@ def handle(sock, recv_packets, clients):
             data,addr = recv_packets.get()
 
             if addr not in clients :
-                access = input('Allow {} to join chat? [y/n]'.format(data.decode('utf-8')))
+                print('Someone trying to join chat by ', addr)
+                access = input('Allow {} to join chat? [y/n]:'.format(data.decode('utf-8')))
                 sock.sendto(access.encode('utf-8'), addr)
                 if access == 'y':
                     clients.add(addr)
@@ -90,9 +112,7 @@ def handle(sock, recv_packets, clients):
             if data.endswith('\q'):
                 clients.remove(addr)
                 continue
-            for client in clients:
-                if client != addr:
-                    sock.sendto(data.encode('utf-8'), client)
+            
     sock.close()
 
 
